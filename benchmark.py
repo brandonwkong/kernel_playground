@@ -25,7 +25,7 @@ Things to look at in the output:
 import torch
 import torch.nn.functional as F
 
-DTYPE = torch.float16
+DTYPE = torch.float32
 EPS = 1e-6
 
 SHAPES = [
@@ -84,8 +84,8 @@ def main() -> None:
     print("-" * 60)
 
     for rows, cols in SHAPES:
-        x = torch.randn(rows, cols, device="cuda", dtype=DTYPE)
-        w = torch.randn(cols, device="cuda", dtype=DTYPE)
+        x = torch.randn(rows, cols, device="cuda", dtype=DTYPE) # if we use random tensors each time gb/s will be more realistic not > 256gb/s
+        w = torch.randn(cols, device="cuda", dtype=DTYPE) # In a real LLM, you're not calling RMSNorm on the exact same tensor 100 times in a row — every token/batch is fresh data — so the honest number for "how fast can this op really go" is the DRAM-bandwidth one (~230-265 GB/s), not the cache-inflated one.
 
         # correctness first — a fast wrong kernel is worth nothing
         ref = rmsnorm_native(x, w)
@@ -97,7 +97,11 @@ def main() -> None:
 
         best_us = min(t_naive, t_native, t_compile)
         # approx bytes touched: read x, read w, write out (fp16 = 2 bytes/elem)
-        nbytes = (rows * cols * 2 + cols + rows * cols) * x.element_size()
+        #- read x: rows * cols elements (every value in the input matrix)
+        #- read w: cols elements (one weight per column, shared across all rows)
+        #- write out: rows * cols elements (same shape as x)
+        
+        nbytes = (rows * cols + cols + rows * cols) * x.element_size()
         gbs = nbytes / (best_us * 1e-6) / 1e9
 
         print(f"{str((rows, cols)):>14} {t_naive:>10.1f} {t_native:>10.1f} {t_compile:>11.1f} {gbs:>10.0f}")
